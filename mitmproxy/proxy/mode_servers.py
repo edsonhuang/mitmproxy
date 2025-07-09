@@ -480,6 +480,14 @@ class UpstreamInstance(AsyncioServerInstance[mode_specs.UpstreamMode]):
         return layers.modes.HttpUpstreamProxy(context)
 
 
+class MultiUpstreamInstance(AsyncioServerInstance[mode_specs.MultiUpstreamMode]):
+    def __init__(self, mode, manager):
+        super().__init__(mode, manager)
+
+    def make_top_layer(self, context: Context) -> Layer:
+        return layers.modes.HttpUpstreamProxy(context)
+
+
 class TransparentInstance(AsyncioServerInstance[mode_specs.TransparentMode]):
     def make_top_layer(self, context: Context) -> Layer:
         return layers.modes.TransparentProxy(context)

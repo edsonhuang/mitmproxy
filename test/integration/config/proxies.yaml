@@ -1,0 +1,14 @@
+proxies:
+  - name: "proxy1"
+    url: "http://139.198.120.73:11113"
+    weight: 1
+    rules:
+      - type: "host_pattern"
+        pattern: "*.google.com"
+      - type: "default"
+  - name: "proxy2"
+    url: "http://139.198.120.73:11114"
+    weight: 1
+    rules:
+      - type: "host_pattern"
+        pattern: "*.baidu.com" 

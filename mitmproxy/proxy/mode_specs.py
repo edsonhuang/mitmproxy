@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import ClassVar
 from typing import Literal
+from pathlib import Path
 
 import mitmproxy_rs
 from mitmproxy.coretypes.serializable import Serializable
@@ -218,6 +219,41 @@ class UpstreamMode(ProxyMode):
         if scheme != "http" and scheme != "https":
             raise ValueError("invalid upstream proxy scheme")
         self.scheme = scheme
+
+
+@dataclass(frozen=True)
+class MultiUpstreamMode(ProxyMode):
+    """Multi-upstream proxy mode that routes traffic to different upstream proxies based on rules."""
+
+    type_name: ClassVar[str] = "multiupstream"
+
+    def __post_init__(self):
+        if not self.data:
+            raise ValueError("MultiUpstreamMode requires a configuration directory path")
+
+        # Validate that the data is a valid directory path
+        config_dir = Path(self.data)
+        if not config_dir.exists():
+            raise ValueError(f"Configuration directory does not exist: {self.data}")
+        if not config_dir.is_dir():
+            raise ValueError(f"Configuration path is not a directory: {self.data}")
+
+    @property
+    def description(self) -> str:
+        return f"Multi-upstream proxy mode using configuration from {self.data}"
+
+    @property
+    def transport_protocol(self) -> Literal["tcp", "udp", "both"]:
+        return "tcp"
+
+    def get_current_upstream(self) -> tuple[str, tuple[str, int]] | None:
+        """Get the current upstream proxy information for compatibility with UpstreamMode."""
+        # This will be set by the addon when a proxy is selected
+        return getattr(self, '_current_upstream', None)
+
+    def set_current_upstream(self, scheme: str, address: tuple[str, int]):
+        """Set the current upstream proxy information."""
+        object.__setattr__(self, '_current_upstream', (scheme, address))
 
 
 class ReverseMode(ProxyMode):

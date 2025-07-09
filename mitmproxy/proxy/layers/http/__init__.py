@@ -963,8 +963,11 @@ class HttpLayer(layer.Layer):
             yield from self.event_to_child(self.connections[self.context.client], event)
             if self.mode is HTTPMode.upstream:
                 proxy_mode = self.context.client.proxy_mode
-                assert isinstance(proxy_mode, UpstreamMode)
-                self.context.server.via = (proxy_mode.scheme, proxy_mode.address)
+                if isinstance(proxy_mode, UpstreamMode):
+                    self.context.server.via = (proxy_mode.scheme, proxy_mode.address)
+                elif hasattr(proxy_mode, 'get_current_upstream') and proxy_mode.get_current_upstream():
+                    scheme, address = proxy_mode.get_current_upstream()
+                    self.context.server.via = (scheme, address)
         elif isinstance(event, events.CommandCompleted):
             stream = self.command_sources.pop(event.command)
             yield from self.event_to_child(stream, event)
