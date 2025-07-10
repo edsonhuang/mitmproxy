@@ -52,6 +52,8 @@ class MultiUpstreamAddon:
         self.proxy_configs: List[ProxyConfig] = []
         self.default_proxy: Optional[ProxyConfig] = None
         self.config_loaded = False
+        # Session affinity mapping: connection_id -> proxy_config
+        self.session_affinity: Dict[str, ProxyConfig] = {}
 
     def load(self, loader):
         pass
@@ -157,33 +159,62 @@ class MultiUpstreamAddon:
             return True
         return False
 
+    def _get_connection_id(self, flow: http.HTTPFlow) -> str:
+        """Generate a unique connection identifier for session affinity."""
+        # For WebSocket connections, use client address + target host
+        if hasattr(flow, 'websocket') and flow.websocket:
+            return f"{flow.client_conn.address[0]}:{flow.request.pretty_host}"
+        # For regular HTTP, use client address + target host + port
+        return f"{flow.client_conn.address[0]}:{flow.request.pretty_host}:{flow.request.port}"
+
     def _select_proxy(self, flow: http.HTTPFlow) -> Optional[ProxyConfig]:
-        """Select the appropriate proxy based on rules."""
+        """Select the appropriate proxy based on rules with session affinity."""
         if not self.config_loaded:
             return None
+
+        # Check session affinity first
+        connection_id = self._get_connection_id(flow)
+        if connection_id in self.session_affinity:
+            cached_proxy = self.session_affinity[connection_id]
+            # Verify the cached proxy still matches the rules
+            if self._proxy_matches_rules(cached_proxy, flow):
+                return cached_proxy
+            else:
+                # Remove invalid cached proxy
+                del self.session_affinity[connection_id]
 
         matching_proxies = []
 
         # Check all proxy configurations
         for proxy_config in self.proxy_configs:
-            for rule in proxy_config.rules:
-                if self._matches_rule(flow, rule):
-                    matching_proxies.append(proxy_config)
-                    break
+            if self._proxy_matches_rules(proxy_config, flow):
+                matching_proxies.append(proxy_config)
 
         if not matching_proxies:
             # Use default proxy if no rules match
             if self.default_proxy:
-                return self.default_proxy
-            return None
+                selected_proxy = self.default_proxy
+            else:
+                return None
+        else:
+            # If multiple proxies match, use weighted random selection
+            if len(matching_proxies) > 1:
+                total_weight = sum(proxy.weight for proxy in matching_proxies)
+                weights = [proxy.weight / total_weight for proxy in matching_proxies]
+                selected_proxy = random.choices(matching_proxies, weights=weights)[0]
+            else:
+                selected_proxy = matching_proxies[0]
 
-        # If multiple proxies match, use weighted random selection
-        if len(matching_proxies) > 1:
-            total_weight = sum(proxy.weight for proxy in matching_proxies)
-            weights = [proxy.weight / total_weight for proxy in matching_proxies]
-            return random.choices(matching_proxies, weights=weights)[0]
-        
-        return matching_proxies[0]
+        # Cache the selected proxy for session affinity
+        self.session_affinity[connection_id] = selected_proxy
+        return selected_proxy
+
+    def _proxy_matches_rules(self, proxy_config: ProxyConfig, flow: http.HTTPFlow) -> bool:
+        """Check if a proxy configuration matches the flow based on its rules."""
+        for rule in proxy_config.rules:
+            if self._matches_rule(flow, rule):
+                return True
+        return False
 
     def proxy_address(self, flow: http.HTTPFlow) -> Optional[Tuple[str, Tuple[str, int]]]:
         """Set the upstream proxy for the flow."""
@@ -219,6 +250,29 @@ class MultiUpstreamAddon:
         if proxy and len(proxy) == 2:
             scheme, address = proxy
             flow.server_conn.via = (scheme, address)
+
+    def websocket_start(self, flow: http.HTTPFlow):
+        """Handle WebSocket connection start."""
+        # Only process if we're in multiupstream mode
+        if not isinstance(flow.client_conn.proxy_mode, MultiUpstreamMode):
+            return
+        
+        proxy = self.proxy_address(flow)
+        if proxy and len(proxy) == 2:
+            scheme, address = proxy
+            flow.server_conn.via = (scheme, address)
+
+    def websocket_end(self, flow: http.HTTPFlow):
+        """Handle WebSocket connection end - cleanup session affinity."""
+        connection_id = self._get_connection_id(flow)
+        if connection_id in self.session_affinity:
+            del self.session_affinity[connection_id]
+
+    def client_disconnect(self, flow: http.HTTPFlow):
+        """Handle client disconnect - cleanup session affinity."""
+        connection_id = self._get_connection_id(flow)
+        if connection_id in self.session_affinity:
+            del self.session_affinity[connection_id]
 
 
 addons = [MultiUpstreamAddon()] 

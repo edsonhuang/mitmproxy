@@ -485,7 +485,9 @@ class MultiUpstreamInstance(AsyncioServerInstance[mode_specs.MultiUpstreamMode])
         super().__init__(mode, manager)
 
     def make_top_layer(self, context: Context) -> Layer:
-        return layers.modes.HttpUpstreamProxy(context)
+        # Use HttpLayer with upstream mode instead of HttpUpstreamProxy
+        # This allows proper handling of WebSocket upgrades
+        return layers.HttpLayer(context, layers.http.HTTPMode.upstream)
 
 
 class TransparentInstance(AsyncioServerInstance[mode_specs.TransparentMode]):

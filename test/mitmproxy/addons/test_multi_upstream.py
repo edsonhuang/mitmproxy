@@ -372,3 +372,80 @@ class TestMultiUpstreamAddon:
             addon._load_configuration_from_dir(temp_dir)
             
             assert not addon.config_loaded 
+
+    def test_websocket_session_affinity(self):
+        """Test that WebSocket connections maintain session affinity."""
+        proxy1 = multi_upstream.ProxyConfig(
+            name="proxy1",
+            url="http://proxy1.example.com:8080",
+            weight=1,
+            rules=[multi_upstream.ProxyRule(type="host_pattern", pattern="*.example.com")]
+        )
+        proxy2 = multi_upstream.ProxyConfig(
+            name="proxy2",
+            url="http://proxy2.example.com:8080",
+            weight=1,
+            rules=[multi_upstream.ProxyRule(type="host_pattern", pattern="*.example.com")]
+        )
+        
+        addon = multi_upstream.MultiUpstreamAddon()
+        addon.proxy_configs = [proxy1, proxy2]
+        addon.config_loaded = True
+        
+        # Create WebSocket flow
+        flow = Mock()
+        flow.client_conn.address = ("127.0.0.1", 12345)
+        flow.request.host = "www.example.com"
+        flow.request.pretty_host = flow.request.host
+        flow.request.port = 80
+        flow.websocket = True
+        
+        # First selection
+        selected1 = addon._select_proxy(flow)
+        assert selected1 is not None
+        
+        # Second selection should return the same proxy due to session affinity
+        selected2 = addon._select_proxy(flow)
+        assert selected2 is not None
+        assert selected1.name == selected2.name
+        
+        # Verify session affinity cache
+        connection_id = addon._get_connection_id(flow)
+        assert connection_id in addon.session_affinity
+        assert addon.session_affinity[connection_id].name == selected1.name
+
+    def test_websocket_session_cleanup(self):
+        """Test that WebSocket session affinity is cleaned up properly."""
+        proxy = multi_upstream.ProxyConfig(
+            name="test_proxy",
+            url="http://proxy.example.com:8080",
+            weight=1,
+            rules=[multi_upstream.ProxyRule(type="default")]
+        )
+        
+        addon = multi_upstream.MultiUpstreamAddon()
+        addon.default_proxy = proxy
+        addon.config_loaded = True
+        
+        # Create WebSocket flow
+        flow = Mock()
+        flow.client_conn.address = ("127.0.0.1", 12345)
+        flow.request.host = "www.example.com"
+        flow.request.pretty_host = flow.request.host
+        flow.request.port = 80
+        flow.websocket = True
+        
+        # Create session affinity
+        addon._select_proxy(flow)
+        connection_id = addon._get_connection_id(flow)
+        assert connection_id in addon.session_affinity
+        
+        # Simulate WebSocket end
+        addon.websocket_end(flow)
+        assert connection_id not in addon.session_affinity
+        
+        # Simulate client disconnect
+        addon._select_proxy(flow)  # Recreate session affinity
+        assert connection_id in addon.session_affinity
+        addon.client_disconnect(flow)
+        assert connection_id not in addon.session_affinity 

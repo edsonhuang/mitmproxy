@@ -5,6 +5,8 @@ proxies:
     rules:
       - type: "host_pattern"
         pattern: "*.google.com"
+      - type: "host_pattern"
+        pattern: "localhost"
       - type: "default"
   - name: "proxy2"
     url: "http://139.198.120.73:11114"
