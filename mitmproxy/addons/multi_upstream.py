@@ -10,6 +10,7 @@ import json
 import logging
 import random
 import re
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,6 +22,7 @@ from mitmproxy import ctx
 from mitmproxy import http
 from mitmproxy.net import server_spec
 from mitmproxy.proxy.mode_specs import MultiUpstreamMode
+from mitmproxy.utils import strutils
 
 
 @dataclass
@@ -39,6 +41,8 @@ class ProxyConfig:
     url: str
     weight: int = 1
     rules: List[ProxyRule] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
 
     def __post_init__(self):
         if self.rules is None:
@@ -82,7 +86,7 @@ class MultiUpstreamAddon:
             self.proxy_configs = []
             self.default_proxy = None
 
-            # Look for configuration files
+            # Look for configuration files with priority
             config_files = []
             for ext in ['*.yaml', '*.yml', '*.json']:
                 config_files.extend(config_path.glob(ext))
@@ -91,7 +95,8 @@ class MultiUpstreamAddon:
                 logging.warning(f"No configuration files found in {config_dir}")
                 return
 
-            # Load the first configuration file found
+            # Sort config files by priority: proxies.yaml first, then others
+            config_files.sort(key=lambda x: (x.name != 'proxies.yaml', x.name))
             config_file = config_files[0]
             logging.info(f"Loading configuration from {config_file}")
 
@@ -121,7 +126,9 @@ class MultiUpstreamAddon:
                         name=proxy_data['name'],
                         url=proxy_data['url'],
                         weight=proxy_data.get('weight', 1),
-                        rules=rules
+                        rules=rules,
+                        username=proxy_data.get('username'),
+                        password=proxy_data.get('password')
                     )
 
                     # Check if this is the default proxy
@@ -226,11 +233,36 @@ class MultiUpstreamAddon:
             try:
                 parsed_url = urllib.parse.urlparse(selected_proxy.url)
                 host = parsed_url.hostname
-                port = parsed_url.port or (443 if parsed_url.scheme == 'https' else 80)
+                
+                # Handle different schemes
                 scheme = parsed_url.scheme
+                if scheme == "socks5":
+                    port = parsed_url.port or 1080  # Default SOCKS5 port
+                elif scheme == "https":
+                    port = parsed_url.port or 443
+                else:  # http
+                    port = parsed_url.port or 80
+                
                 address = (host, port)
                 if not scheme or not host or not port:
                     return None
+                
+                # Extract authentication info from URL if present
+                username = None
+                password = None
+                if parsed_url.username and parsed_url.password:
+                    username = urllib.parse.unquote(parsed_url.username)
+                    password = urllib.parse.unquote(parsed_url.password)
+                elif selected_proxy.username and selected_proxy.password:
+                    # Fallback to separate username/password fields
+                    username = selected_proxy.username
+                    password = selected_proxy.password
+                
+                # Set authentication info in flow metadata for SOCKS5
+                if scheme == "socks5" and username and password:
+                    flow.metadata['socks5_username'] = username
+                    flow.metadata['socks5_password'] = password
+                
                 # Set the current upstream proxy information for compatibility
                 if hasattr(flow.server_conn, 'proxy_mode') and hasattr(flow.server_conn.proxy_mode, 'set_current_upstream'):
                     flow.server_conn.proxy_mode.set_current_upstream(scheme, address)
@@ -250,6 +282,47 @@ class MultiUpstreamAddon:
         if proxy and len(proxy) == 2:
             scheme, address = proxy
             flow.server_conn.via = (scheme, address)
+            
+            # Add HTTP authentication if credentials are available
+            selected_proxy = self._select_proxy(flow)
+            if selected_proxy and scheme in ["http", "https"]:
+                self._add_http_auth(flow, selected_proxy)
+
+    def http_connect_upstream(self, flow: http.HTTPFlow):
+        """Handle HTTP CONNECT request and add authentication."""
+        # Only process if we're in multiupstream mode
+        if not isinstance(flow.client_conn.proxy_mode, MultiUpstreamMode):
+            return
+        
+        # Add HTTP authentication for CONNECT requests
+        selected_proxy = self._select_proxy(flow)
+        if selected_proxy and flow.server_conn.via and flow.server_conn.via[0] in ["http", "https"]:
+            self._add_http_auth(flow, selected_proxy)
+
+    def _add_http_auth(self, flow: http.HTTPFlow, proxy_config: ProxyConfig):
+        """Add HTTP Basic authentication to the request."""
+        username = None
+        password = None
+        
+        # Try to get credentials from URL first
+        parsed_url = urllib.parse.urlparse(proxy_config.url)
+        if parsed_url.username and parsed_url.password:
+            username = urllib.parse.unquote(parsed_url.username)
+            password = urllib.parse.unquote(parsed_url.password)
+        elif proxy_config.username and proxy_config.password:
+            # Fallback to separate username/password fields
+            username = proxy_config.username
+            password = proxy_config.password
+        
+        if username and password:
+            # Create Basic auth header
+            auth_string = f"{username}:{password}"
+            auth_bytes = strutils.always_bytes(auth_string)
+            auth_header = b"Basic " + base64.b64encode(auth_bytes)
+            
+            # Add to request headers
+            flow.request.headers["Proxy-Authorization"] = auth_header
+            logging.debug(f"Added HTTP authentication for proxy {proxy_config.name}")
 
     def websocket_start(self, flow: http.HTTPFlow):
         """Handle WebSocket connection start."""

@@ -1,0 +1,16 @@
+proxies:
+  - name: "socks5-proxy-auth"
+    url: "socks5://127.0.0.1:1080"
+    weight: 1
+    rules:
+      - type: "host_pattern"
+        pattern: "*.google.com"
+      - type: "default"
+  - name: "socks5-proxy-noauth"
+    url: "socks5://127.0.0.1:1081"
+    weight: 1
+    rules:
+      - type: "host_pattern"
+        pattern: "*.baidu.com"
+      - type: "default" 
+      

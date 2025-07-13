@@ -5,12 +5,10 @@ proxies:
     rules:
       - type: "host_pattern"
         pattern: "*.google.com"
-      - type: "host_pattern"
-        pattern: "localhost"
       - type: "default"
   - name: "proxy2"
-    url: "http://139.198.120.73:11114"
+    url: "http://acemind:runfast8888@139.198.120.73:11114"
     weight: 1
     rules:
       - type: "host_pattern"
-        pattern: "*.baidu.com" 
+        pattern: "*.baidu.com"

@@ -1,25 +1,26 @@
-# Multi-Upstream Proxy Mode
+# Multi-Upstream Proxy Mode for mitmproxy
 
-The `multiupstream` mode allows mitmproxy to route traffic to different upstream proxies based on configurable rules. This is useful for load balancing, geographic routing, or service-specific proxy selection.
+Multi-upstream proxy mode allows mitmproxy to route traffic to different upstream proxies based on configurable rules with weighted load balancing and session affinity support.
 
-## Usage
+## Features
 
-```bash
-mitmproxy --mode multiupstream:config_dir
-mitmdump --mode multiupstream:config_dir
-mitmweb --mode multiupstream:config_dir
-```
+- 🔄 **Load Balancing**: Distribute traffic across multiple upstream proxies with weighted selection
+- 🎯 **Rule-Based Routing**: Route traffic based on host patterns, ports, or default rules
+- 🔗 **Session Affinity**: Keep WebSocket connections on the same proxy for consistent performance
+- 🔐 **Authentication Support**: Support HTTP Basic authentication for upstream proxies
+- 🧦 **SOCKS5 Support**: Full support for SOCKS5 upstream proxies with authentication
+- 🌐 **WebSocket Support**: Proper WebSocket proxying through HTTP upgrade requests
+- ⚖️ **Weighted Selection**: Configure proxy weights for load balancing
 
-Where `config_dir` is the path to a directory containing proxy configuration files.
+## Installation
+
+Multi-upstream mode is integrated into mitmproxy core. No additional installation required.
 
 ## Configuration
 
-The configuration directory should contain one of the following files:
-- `proxies.yaml` (recommended)
-- `proxies.yml`
-- `proxies.json`
+### Basic Configuration
 
-### YAML Configuration Format
+Create a YAML configuration file (e.g., `proxies.yaml`):
 
 ```yaml
 proxies:
@@ -29,8 +30,6 @@ proxies:
     rules:
       - type: "host_pattern"
         pattern: "*.google.com"
-      - type: "port"
-        port: 443
       - type: "default"
   
   - name: "proxy2"
@@ -38,30 +37,80 @@ proxies:
     weight: 2
     rules:
       - type: "host_pattern"
-        pattern: "*.github.com"
+        pattern: "*.baidu.com"
 ```
 
-### JSON Configuration Format
+### Authentication Configuration
 
-```json
-{
-  "proxies": [
-    {
-      "name": "proxy1",
-      "url": "http://proxy1.example.com:8080",
-      "weight": 1,
-      "rules": [
-        {
-          "type": "host_pattern",
-          "pattern": "*.google.com"
-        },
-        {
-          "type": "default"
-        }
-      ]
-    }
-  ]
-}
+#### Method 1: URL-based Authentication (Recommended)
+
+```yaml
+proxies:
+  - name: "proxy1"
+    url: "http://username:password@proxy1.example.com:8080"
+    weight: 1
+    rules:
+      - type: "default"
+  
+  - name: "proxy2"
+    url: "http://another_user:another_pass@proxy2.example.com:8080"
+    weight: 1
+    rules:
+      - type: "default"
+```
+
+#### Method 2: Separate Authentication Fields
+
+```yaml
+proxies:
+  - name: "proxy1"
+    url: "http://proxy1.example.com:8080"
+    username: "username"
+    password: "password"
+    weight: 1
+    rules:
+      - type: "default"
+```
+
+### SOCKS5 Configuration
+
+```yaml
+proxies:
+  - name: "socks5-proxy"
+    url: "socks5://username:password@proxy.example.com:1080"
+    weight: 1
+    rules:
+      - type: "default"
+  
+  - name: "socks5-noauth"
+    url: "socks5://proxy.example.com:1080"
+    weight: 1
+    rules:
+      - type: "default"
+```
+
+## Usage
+
+### Command Line
+
+```bash
+# Basic usage
+mitmproxy --mode multiupstream:/path/to/config/directory
+
+# With custom port
+mitmproxy --mode multiupstream:/path/to/config/directory --listen-port 8080
+
+# With verbose logging
+mitmproxy --mode multiupstream:/path/to/config/directory --verbose
+```
+
+### Configuration Directory Structure
+
+```
+config/
+├── proxies.yaml          # Main configuration (loaded first)
+├── proxies_socks5.yaml   # SOCKS5 configuration
+└── other_config.yaml     # Other configurations
 ```
 
 ## Configuration Options
@@ -70,44 +119,98 @@ proxies:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Unique name for the proxy |
-| `url` | string | Yes | Proxy URL (http://host:port or https://host:port) |
-| `weight` | integer | No | Weight for load balancing (default: 1) |
-| `rules` | array | Yes | Array of routing rules |
+| `name` | string | Yes | Unique proxy identifier |
+| `url` | string | Yes | Proxy URL with scheme (http/https/socks5) |
+| `weight` | integer | No | Load balancing weight (default: 1) |
+| `username` | string | No | Authentication username |
+| `password` | string | No | Authentication password |
+| `rules` | array | Yes | Routing rules |
 
 ### Rule Types
 
 #### Host Pattern Rule
-Routes traffic based on hostname patterns.
+
+Route traffic based on hostname patterns:
 
 ```yaml
-- type: "host_pattern"
-  pattern: "*.example.com"
+rules:
+  - type: "host_pattern"
+    pattern: "*.example.com"  # Supports wildcards
 ```
 
-**Pattern Syntax:**
-- `*` matches any sequence of characters
-- `*.example.com` matches `www.example.com`, `api.example.com`, etc.
-- `example.com` matches only `example.com`
-
 #### Port Rule
-Routes traffic based on destination port.
+
+Route traffic based on destination port:
 
 ```yaml
-- type: "port"
-  port: 443
+rules:
+  - type: "port"
+    port: 443
 ```
 
 #### Default Rule
-Acts as a fallback when no other rules match.
+
+Use as fallback when no other rules match:
 
 ```yaml
-- type: "default"
+rules:
+  - type: "default"
 ```
 
 ## Load Balancing
 
-When multiple proxies match the same request, the system uses weighted random selection:
+### Weighted Selection
+
+Proxies with higher weights receive more traffic:
+
+```yaml
+proxies:
+  - name: "primary"
+    url: "http://primary.example.com:8080"
+    weight: 3  # Receives 75% of traffic
+    rules:
+      - type: "default"
+  
+  - name: "secondary"
+    url: "http://secondary.example.com:8080"
+    weight: 1  # Receives 25% of traffic
+    rules:
+      - type: "default"
+```
+
+### Session Affinity
+
+WebSocket connections maintain session affinity to ensure consistent performance:
+
+- Connections to the same host are routed to the same proxy
+- Session affinity is maintained for the duration of the connection
+- Automatic cleanup when connections close
+
+## Authentication Support
+
+### HTTP/HTTPS Proxies
+
+- **Basic Authentication**: Username/password authentication
+- **URL Encoding**: Special characters in credentials are automatically URL-encoded
+- **Automatic Headers**: `Proxy-Authorization` headers are automatically added
+
+### SOCKS5 Proxies
+
+- **Username/Password Authentication**: Full SOCKS5 authentication support
+- **No Authentication**: Support for SOCKS5 proxies without authentication
+- **URL Parsing**: Credentials can be specified in the URL
+
+## WebSocket Support
+
+Multi-upstream mode fully supports WebSocket connections:
+
+- **HTTP Upgrade**: WebSocket connections use HTTP upgrade requests
+- **Session Affinity**: WebSocket connections maintain proxy affinity
+- **SOCKS5 Tunneling**: WebSocket connections work through SOCKS5 proxies
+
+## Examples
+
+### Example 1: Simple Load Balancing
 
 ```yaml
 proxies:
@@ -115,201 +218,132 @@ proxies:
     url: "http://proxy1.example.com:8080"
     weight: 1
     rules:
-      - type: "host_pattern"
-        pattern: "*.example.com"
+      - type: "default"
   
   - name: "proxy2"
     url: "http://proxy2.example.com:8080"
-    weight: 2
+    weight: 1
     rules:
-      - type: "host_pattern"
-        pattern: "*.example.com"
+      - type: "default"
 ```
 
-In this example, `proxy2` will be selected twice as often as `proxy1` for matching requests.
-
-## Session Affinity
-
-The multiupstream mode supports **session affinity** to ensure consistent proxy selection for long-lived connections like WebSocket:
-
-### How It Works
-
-1. **Connection Identification**: Each connection is identified by a unique key:
-   - **WebSocket**: `client_ip:target_host`
-   - **HTTP**: `client_ip:target_host:port`
-
-2. **Proxy Caching**: Once a proxy is selected for a connection, it's cached for the duration of the connection
-
-3. **Consistent Routing**: Subsequent requests from the same connection will use the cached proxy
-
-4. **Automatic Cleanup**: Session affinity data is automatically cleaned up when connections end
-
-### Benefits
-
-- **WebSocket Stability**: Prevents WebSocket connections from switching proxies mid-session
-- **Connection Consistency**: Ensures all requests from the same client use the same proxy
-- **Reduced Overhead**: Avoids proxy switching overhead for established connections
-
-### Example
+### Example 2: Host-Based Routing
 
 ```yaml
 proxies:
-  - name: "primary_proxy"
-    url: "http://primary.example.com:8080"
-    weight: 1
-    rules:
-      - type: "host_pattern"
-        pattern: "*.example.com"
-  
-  - name: "backup_proxy"
-    url: "http://backup.example.com:8080"
-    weight: 1
-    rules:
-      - type: "host_pattern"
-        pattern: "*.example.com"
-```
-
-In this configuration, even though both proxies have the same weight, a WebSocket connection to `ws.example.com` will consistently use the same proxy throughout its lifetime.
-
-## Examples
-
-### Basic Configuration
-
-```yaml
-proxies:
-  - name: "google_proxy"
-    url: "http://proxy1.example.com:8080"
+  - name: "google-proxy"
+    url: "http://google-proxy.example.com:8080"
     weight: 1
     rules:
       - type: "host_pattern"
         pattern: "*.google.com"
-      - type: "host_pattern"
-        pattern: "*.googleapis.com"
   
-  - name: "github_proxy"
-    url: "http://proxy2.example.com:8080"
-    weight: 1
-    rules:
-      - type: "host_pattern"
-        pattern: "*.github.com"
-  
-  - name: "default_proxy"
-    url: "http://proxy3.example.com:8080"
+  - name: "default-proxy"
+    url: "http://default-proxy.example.com:8080"
     weight: 1
     rules:
       - type: "default"
 ```
 
-### Load Balanced Configuration
+### Example 3: Mixed HTTP and SOCKS5
 
 ```yaml
 proxies:
-  - name: "primary_proxy"
-    url: "http://primary.example.com:8080"
-    weight: 3
-    rules:
-      - type: "host_pattern"
-        pattern: "*.example.com"
-  
-  - name: "backup_proxy"
-    url: "http://backup.example.com:8080"
+  - name: "http-proxy"
+    url: "http://user:pass@http-proxy.example.com:8080"
     weight: 1
     rules:
       - type: "host_pattern"
         pattern: "*.example.com"
   
-  - name: "fallback_proxy"
-    url: "http://fallback.example.com:8080"
+  - name: "socks5-proxy"
+    url: "socks5://user:pass@socks5-proxy.example.com:1080"
     weight: 1
     rules:
       - type: "default"
 ```
 
-### WebSocket-Friendly Configuration
+## Testing
 
-```yaml
-proxies:
-  - name: "websocket_proxy1"
-    url: "http://ws-proxy1.example.com:8080"
-    weight: 1
-    rules:
-      - type: "host_pattern"
-        pattern: "*.websocket.example.com"
-      - type: "port"
-        port: 8080
-  
-  - name: "websocket_proxy2"
-    url: "http://ws-proxy2.example.com:8080"
-    weight: 1
-    rules:
-      - type: "host_pattern"
-        pattern: "*.websocket.example.com"
-      - type: "port"
-        port: 8080
-  
-  - name: "http_proxy"
-    url: "http://http-proxy.example.com:8080"
-    weight: 1
-    rules:
-      - type: "default"
+### Integration Tests
+
+Run the integration tests to verify functionality:
+
+```bash
+python test/integration/test_multiupstream_integration.py
 ```
 
-This configuration ensures WebSocket connections maintain session affinity while HTTP requests can be load balanced.
+### Manual Testing
 
-## Error Handling
+1. Start mitmproxy with multiupstream mode:
+   ```bash
+   mitmproxy --mode multiupstream:test/integration/config --listen-port 8080
+   ```
 
-- **Invalid configuration directory**: mitmproxy will start but not load any proxy configurations
-- **Invalid configuration file**: mitmproxy will start but not load any proxy configurations
-- **Invalid proxy URL**: Requests matching that proxy will fail
-- **No matching proxy**: Requests will be processed without an upstream proxy
-- **Session affinity cache overflow**: Old entries are automatically cleaned up
+2. Test HTTP requests:
+   ```bash
+   curl -x http://127.0.0.1:8080 http://httpbin.org/ip
+   ```
+
+3. Test WebSocket connections:
+   ```bash
+   curl -x http://127.0.0.1:8080 -H "Connection: Upgrade" -H "Upgrade: websocket" http://echo.websocket.org
+   ```
 
 ## Troubleshooting
 
-### Check Configuration Loading
-
-Start mitmproxy with verbose logging to see configuration loading messages:
-
-```bash
-mitmdump --mode multiupstream:config_dir --set console_eventlog_verbosity=info
-```
-
-### Verify Proxy Connectivity
-
-Test your upstream proxies directly:
-
-```bash
-curl -x http://proxy.example.com:8080 http://httpbin.org/ip
-```
-
-### Debug Session Affinity
-
-To debug session affinity issues, check the mitmproxy logs for connection routing information.
-
 ### Common Issues
 
-1. **502 Bad Gateway**: Upstream proxy is not accessible
-2. **Configuration not loaded**: Check file format and directory path
-3. **No traffic routing**: Verify rule patterns match your target hosts
-4. **WebSocket disconnections**: Check if session affinity is working correctly
-5. **Memory usage**: Monitor session affinity cache size
+1. **Configuration Not Loaded**
+   - Ensure configuration directory exists
+   - Check file permissions
+   - Verify YAML syntax
 
-## Integration with Other mitmproxy Features
+2. **Authentication Failures**
+   - Verify credentials are correct
+   - Check URL encoding for special characters
+   - Ensure proxy supports Basic authentication
 
-The multiupstream mode works with all standard mitmproxy features:
-- Scripts and addons
-- Certificate handling
-- Request/response modification
-- Flow export
-- Web interface
-- WebSocket support
-- HTTP/2 support
+3. **WebSocket Issues**
+   - WebSocket connections require HTTP upgrade requests
+   - SOCKS5 proxies must support WebSocket tunneling
+   - Check proxy server WebSocket support
 
-## Performance Considerations
+### Debug Mode
 
-- Rule matching is performed for each request
-- Host pattern matching uses regex compilation
-- Weighted selection uses random number generation
-- Configuration is loaded once at startup
-- Session affinity cache is automatically managed
-- Memory usage scales with the number of concurrent connections 
+Enable verbose logging for debugging:
+
+```bash
+mitmproxy --mode multiupstream:/path/to/config --verbose
+```
+
+## Architecture
+
+### Components
+
+1. **MultiUpstreamMode**: Proxy mode specification
+2. **MultiUpstreamAddon**: Core addon for proxy selection and authentication
+3. **Socks5UpstreamProxy**: SOCKS5 upstream proxy implementation
+4. **HttpUpstreamProxy**: HTTP/HTTPS upstream proxy implementation
+
+### Flow
+
+1. **Configuration Loading**: Load proxy configurations from YAML/JSON files
+2. **Rule Matching**: Match requests against proxy rules
+3. **Proxy Selection**: Select appropriate proxy based on rules and weights
+4. **Authentication**: Add authentication headers if required
+5. **Session Affinity**: Maintain connection affinity for WebSocket
+
+## Contributing
+
+To contribute to multi-upstream mode:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
+
+## License
+
+This feature is part of mitmproxy and follows the same license terms. 

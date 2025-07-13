@@ -61,6 +61,7 @@ from mitmproxy.proxy.layers import tcp
 from mitmproxy.proxy.layers import tls
 from mitmproxy.proxy.layers import websocket
 from mitmproxy.proxy.layers.http import _upstream_proxy
+from mitmproxy.proxy.layers.http import _socks5_upstream_proxy
 from mitmproxy.proxy.utils import expect
 from mitmproxy.proxy.utils import ReceiveBuffer
 from mitmproxy.utils import human
@@ -800,7 +801,17 @@ class HttpStream(layer.Layer):
         yield from self.handle_connect_finish()
 
     def handle_connect_upstream(self):
-        self.child_layer = _upstream_proxy.HttpUpstreamProxy.make(self.context, True)[0]
+        # Check if we're using SOCKS5 upstream proxy
+        if (self.flow.server_conn.via and 
+            isinstance(self.flow.server_conn.via, tuple) and 
+            len(self.flow.server_conn.via) == 2 and 
+            self.flow.server_conn.via[0] == "socks5"):
+            # Get authentication info from flow metadata
+            username = self.flow.metadata.get('socks5_username')
+            password = self.flow.metadata.get('socks5_password')
+            self.child_layer = _socks5_upstream_proxy.Socks5UpstreamProxy.make(self.context, username, password)[0]
+        else:
+            self.child_layer = _upstream_proxy.HttpUpstreamProxy.make(self.context, True)[0]
         yield from self.handle_connect_finish()
 
     def handle_connect_finish(self):
@@ -1127,9 +1138,25 @@ class HttpLayer(layer.Layer):
 
             if event.via:
                 context.server.via = event.via
-                # We always send a CONNECT request, *except* for plaintext absolute-form HTTP requests in upstream mode.
-                send_connect = event.tls or self.mode != HTTPMode.upstream
-                stack /= _upstream_proxy.HttpUpstreamProxy.make(context, send_connect)
+                # Check if we're using SOCKS5 upstream proxy
+                if (isinstance(event.via, tuple) and 
+                    len(event.via) == 2 and 
+                    event.via[0] == "socks5"):
+                    # Get authentication info from the stream that requested this connection
+                    username = None
+                    password = None
+                    for cmd in self.waiting_for_establishment.get(context.server, []):
+                        if hasattr(cmd, 'stream_id'):
+                            stream = self.streams.get(cmd.stream_id)
+                            if stream and hasattr(stream, 'flow'):
+                                username = stream.flow.metadata.get('socks5_username')
+                                password = stream.flow.metadata.get('socks5_password')
+                                break
+                    stack /= _socks5_upstream_proxy.Socks5UpstreamProxy.make(context, username, password)
+                else:
+                    # We always send a CONNECT request, *except* for plaintext absolute-form HTTP requests in upstream mode.
+                    send_connect = event.tls or self.mode != HTTPMode.upstream
+                    stack /= _upstream_proxy.HttpUpstreamProxy.make(context, send_connect)
             if event.tls:
                 # Assume that we are in transparent mode and lazily did not open a connection yet.
                 # We don't want the IP (which is the address) as the upstream SNI, but the client's SNI instead.

@@ -477,7 +477,13 @@ class RegularInstance(AsyncioServerInstance[mode_specs.RegularMode]):
 
 class UpstreamInstance(AsyncioServerInstance[mode_specs.UpstreamMode]):
     def make_top_layer(self, context: Context) -> Layer:
-        return layers.modes.HttpUpstreamProxy(context)
+        # Check if we're using SOCKS5 upstream proxy
+        if self.mode.scheme == "socks5":
+            # Import here to avoid circular imports
+            from mitmproxy.proxy.layers.http import _socks5_upstream_proxy
+            return _socks5_upstream_proxy.Socks5UpstreamProxy.make(context)[0]
+        else:
+            return layers.modes.HttpUpstreamProxy(context)
 
 
 class MultiUpstreamInstance(AsyncioServerInstance[mode_specs.MultiUpstreamMode]):
